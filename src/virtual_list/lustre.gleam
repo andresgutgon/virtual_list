@@ -1,123 +1,183 @@
+//// Lustre adapter for `virtual_list`.
+////
+//// The pure core lives in `virtual_list`. This module owns the runtime side:
+//// rendering the spacer + visible items, and wiring up the DOM observers
+//// (scroll, container resize, item resize) via FFI. Each observer dispatches
+//// a message back into the consumer's update loop, which then mutates the
+//// virtualizer state with the corresponding pure setter.
+
 import gleam/dynamic/decode
 import gleam/int
 import gleam/list
 import lustre/attribute.{type Attribute}
+import lustre/effect.{type Effect}
 import lustre/element.{type Element}
 import lustre/element/html
 import lustre/element/keyed
 import lustre/event
-import virtual_list
+import virtual_list.{
+  type VirtualItem, type Virtualizer, total_size, virtual_items,
+}
 
-@external(javascript, "./lustre_ffi.mjs", "get_container_height")
-fn get_container_height(id: String) -> Int
+const index_attribute = "data-index"
 
-/// Render a fixed-height virtual list inside a scrollable container.
+// VIEW -----------------------------------------------------------------------
+
+/// Render the virtual list inside a scrollable container.
 ///
-/// Only the visible items (plus `overscan` extras above and below) are mounted
-/// in the DOM. Each item is absolutely positioned by index so the total scroll
-/// height is preserved.
-///
-/// The container height is measured from the live DOM element so the virtual
-/// window always reflects the real viewport — no need to pass a hard-coded
-/// pixel value.
-///
-/// Parameters:
-/// - `id`               — DOM id of the scroll container
-/// - `items`            — the full item list (all pages accumulated)
-/// - `item_height`      — fixed pixel height of each row
-/// - `scroll_top`       — current scroll offset held in your model
-/// - `overscan`         — extra rows to keep mounted above/below the viewport
-/// - `key`              — unique key for each item (for Lustre's keyed diffing)
-/// - `render`           — `fn(index, item) -> Element(msg)` for each visible row
-/// - `on_scroll`        — `fn(scroll_top) -> msg` fired on every scroll event
-/// - `attributes`       — additional attributes on the scroll container
-///                        (use this to set CSS `height` via `attribute.style`)
+/// - `id`         — DOM id used by the FFI observers
+/// - `virtualizer`— the current state from the consumer's model
+/// - `render`     — `fn(VirtualItem) -> Element(msg)` for each visible row
+/// - `on_scroll`  — fired on every scroll event with the new offset
+/// - `attributes` — extra attributes on the scroll container (e.g. CSS height)
 pub fn view(
   id container_id: String,
-  items items: List(a),
-  item_height item_height: Int,
-  scroll_top scroll_top: Int,
-  overscan overscan: Int,
-  key key: fn(a) -> String,
-  render render: fn(Int, a) -> Element(msg),
+  virtualizer virtualizer: Virtualizer,
+  render render: fn(VirtualItem) -> Element(msg),
   on_scroll on_scroll: fn(Int) -> msg,
   attributes attributes: List(Attribute(msg)),
 ) -> Element(msg) {
-  let total = list.length(items)
-  let container_height = get_container_height(container_id)
-  let window =
-    virtual_list.compute(
-      total_count: total,
-      item_height: item_height,
-      container_height: container_height,
-      scroll_top: scroll_top,
-      overscan: overscan,
-    )
-  let visible = virtual_list.slice(items, window)
+  let visible = virtual_items(virtualizer)
+  let total = total_size(virtualizer)
 
+  // The package keeps its own positioning styles inline rather than relying on
+  // Tailwind utilities — consumers' build pipelines may not scan this source.
+  // Only `position: relative` is forced (so the spacer can host absolute items).
+  // Overflow / height are caller concerns: pass them via `attributes` for
+  // container-scroll, or omit and use `observe_window` for window-scroll.
   html.div(
     list.flatten([
       [
         attribute.id(container_id),
-        attribute.class("relative overflow-y-auto"),
+        attribute.style("position", "relative"),
         on_scroll_event(on_scroll),
       ],
       attributes,
     ]),
-    [view_inner(visible, total, item_height, key, render)],
+    [view_inner(visible, total, render)],
   )
 }
 
 fn view_inner(
-  visible: List(#(Int, a)),
+  visible: List(VirtualItem),
   total: Int,
-  item_height: Int,
-  key: fn(a) -> String,
-  render: fn(Int, a) -> Element(msg),
+  render: fn(VirtualItem) -> Element(msg),
 ) -> Element(msg) {
-  html.div(
+  // Spacer reserves the full virtual height so the scrollbar reflects the
+  // entire list. Visible rows are absolutely positioned by their measured
+  // start offset.
+  keyed.div(
     [
-      attribute.style("height", int.to_string(total * item_height) <> "px"),
-      attribute.class("relative"),
+      attribute.style("position", "relative"),
+      attribute.style("width", "100%"),
+      attribute.style("height", int.to_string(total) <> "px"),
     ],
-    [
-      keyed.div(
-        [attribute.class("absolute inset-x-0 top-0")],
-        list.map(visible, fn(pair) {
-          let #(index, item) = pair
-          #(
-            key(item),
-            html.div(
-              [
-                attribute.class("absolute inset-x-0"),
-                attribute.style(
-                  "height",
-                  int.to_string(item_height) <> "px",
-                ),
-                attribute.style(
-                  "top",
-                  int.to_string(index * item_height) <> "px",
-                ),
-              ],
-              [render(index, item)],
+    list.map(visible, fn(item: VirtualItem) {
+      #(
+        item.key,
+        html.div(
+          [
+            attribute.attribute(index_attribute, int.to_string(item.index)),
+            attribute.style("position", "absolute"),
+            attribute.style("left", "0"),
+            attribute.style("right", "0"),
+            attribute.style(
+              "transform",
+              "translateY(" <> int.to_string(item.start) <> "px)",
             ),
-          )
-        }),
-      ),
-    ],
+            attribute.style("height", int.to_string(item.size) <> "px"),
+          ],
+          [render(item)],
+        ),
+      )
+    }),
   )
 }
 
-// Reads event.target.scrollTop from the scroll event at dispatch time.
-// The nested decode.field calls are lazy — they run when the event fires,
-// not when the attribute is constructed.
 fn on_scroll_event(msg_fn: fn(Int) -> msg) -> Attribute(msg) {
   let decoder = {
-    use scroll_top <- decode.field("target", {
+    use offset <- decode.field("target", {
       use top <- decode.field("scrollTop", decode.int)
       decode.success(top)
     })
-    decode.success(msg_fn(scroll_top))
+    decode.success(msg_fn(offset))
   }
+  // Throttle scroll events: the model already drives the visible window from
+  // `scroll_offset`, and dispatching every scroll tick produces N renders per
+  // second of pixel-precision noise that the user can't see.
   event.on("scroll", decoder)
+  |> event.throttle(16)
 }
+
+// OBSERVER LIFECYCLE ---------------------------------------------------------
+
+/// Set up the DOM observers that drive the virtualizer's measurements.
+///
+/// Call this once after the scroll container has been mounted (e.g. from the
+/// initial route load). The returned effect installs:
+/// - a `ResizeObserver` on the scroll container — dispatches `on_resize`
+/// - a `ResizeObserver` on each row tagged with `data-index` — dispatches
+///   `on_measure_item`
+/// - the initial scroll offset — dispatched via `on_scroll`
+///
+/// These observers persist for the lifetime of the page; Lustre will tear them
+/// down with the element when the route changes.
+pub fn observe(
+  id container_id: String,
+  on_scroll on_scroll: fn(Int) -> msg,
+  on_resize on_resize: fn(Int) -> msg,
+  on_measure_item on_measure_item: fn(Int, Int) -> msg,
+) -> Effect(msg) {
+  effect.after_paint(fn(dispatch, _root) {
+    setup_observers(
+      container_id,
+      index_attribute,
+      fn(top) { dispatch(on_scroll(top)) },
+      fn(height) { dispatch(on_resize(height)) },
+      fn(index, size) { dispatch(on_measure_item(index, size)) },
+    )
+  })
+}
+
+@external(javascript, "./lustre_ffi.mjs", "setup_observers")
+fn setup_observers(
+  container_id: String,
+  index_attribute: String,
+  on_scroll: fn(Int) -> Nil,
+  on_resize: fn(Int) -> Nil,
+  on_measure_item: fn(Int, Int) -> Nil,
+) -> Nil
+
+/// Window-scroll variant of `observe`. The page itself is the scroll surface;
+/// the vlist element is just a tall spacer in flow. Scroll offset is reported
+/// relative to the spacer's top, so the same virtualizer math works without
+/// changes — only the source of scroll/resize events differs.
+///
+/// Use this when you want the page to scroll instead of an inner container.
+/// In that case do NOT set `overflow-y` or a fixed height on the vlist
+/// element via `attributes`.
+pub fn observe_window(
+  id container_id: String,
+  on_scroll on_scroll: fn(Int) -> msg,
+  on_resize on_resize: fn(Int) -> msg,
+  on_measure_item on_measure_item: fn(Int, Int) -> msg,
+) -> Effect(msg) {
+  effect.after_paint(fn(dispatch, _root) {
+    setup_window_observers(
+      container_id,
+      index_attribute,
+      fn(top) { dispatch(on_scroll(top)) },
+      fn(height) { dispatch(on_resize(height)) },
+      fn(index, size) { dispatch(on_measure_item(index, size)) },
+    )
+  })
+}
+
+@external(javascript, "./lustre_ffi.mjs", "setup_window_observers")
+fn setup_window_observers(
+  spacer_id: String,
+  index_attribute: String,
+  on_scroll: fn(Int) -> Nil,
+  on_resize: fn(Int) -> Nil,
+  on_measure_item: fn(Int, Int) -> Nil,
+) -> Nil
