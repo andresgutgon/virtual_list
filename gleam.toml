@@ -1,0 +1,18 @@
+name = "virtual_list"
+version = "0.1.0"
+target = "javascript"
+
+description = "A simple fixed-height virtual list for Gleam, with a Lustre binding"
+licences = ["MIT"]
+
+[[links]]
+title = "Repository"
+href = "https://github.com/andresgutgon/virtual_list"
+
+
+[dependencies]
+gleam_stdlib = ">= 1.0.0 and < 2.0.0"
+lustre = ">= 5.6.0 and < 6.0.0"
+
+[dev_dependencies]
+gleeunit = ">= 1.0.0 and < 2.0.0"
