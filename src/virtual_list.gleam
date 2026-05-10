@@ -1,9 +1,18 @@
-//// Core virtual-list math, ported from TanStack Virtual's `@tanstack/virtual-core`.
+//// Core virtual-list math.
 ////
-//// This module is pure (no FFI, no DOM): it produces a list of `VirtualItem`s to
-//// render given a scroll offset, container size, and item size cache. Adapters
-//// (e.g. `virtual_list/lustre`) wire this up to the runtime, observing scroll
-//// and resize events and dispatching them back into the model.
+//// This module is a Gleam port of [TanStack Virtual]'s `@tanstack/virtual-core`
+//// — the measurements model, the range-extraction algorithm, and the
+//// observer architecture are all faithfully translated from the original
+//// TypeScript. Many thanks to **Tanner Linsley** and the TanStack
+//// maintainers; the design is theirs, this is just the translation.
+////
+//// [TanStack Virtual]: https://tanstack.com/virtual
+////
+//// The module itself is pure (no FFI, no DOM): it produces a list of
+//// `VirtualItem`s to render given a scroll offset, container size, and
+//// item size cache. Adapters (e.g. `virtual_list/lustre`) wire this up to
+//// the runtime, observing scroll and resize events and dispatching them
+//// back into the consumer's model.
 
 import gleam/dict.{type Dict}
 import gleam/int

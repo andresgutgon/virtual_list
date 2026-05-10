@@ -5,6 +5,17 @@
 //// (scroll, container resize, item resize) via FFI. Each observer dispatches
 //// a message back into the consumer's update loop, which then mutates the
 //// virtualizer state with the corresponding pure setter.
+////
+//// Two observation modes are exposed:
+////
+//// - [`observe`](#observe) — scroll/resize on the spacer element itself
+////   (the consumer gives it a fixed height + `overflow-y`).
+//// - [`observe_window`](#observe_window) — scroll/resize on `window`; the
+////   spacer is just a tall element in document flow.
+////
+//// The observation primitives are ported from TanStack Virtual's
+//// `observeElementOffset` / `observeWindowOffset` / `observeElementRect`
+//// callbacks. Credit to the TanStack team — see `README.md`.
 
 import gleam/dynamic/decode
 import gleam/int
