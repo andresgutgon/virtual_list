@@ -130,6 +130,16 @@ pub fn set_container_size(v: Virtualizer, size: Int) -> Virtualizer {
   Virtualizer(..v, container_size: int.max(0, size))
 }
 
+/// Update the total item count. No-op if the count is unchanged (avoids
+/// rebuilding measurements). Use this when the data source grows (e.g. after
+/// an infinite-scroll page load) without changing any other option.
+pub fn set_count(v: Virtualizer, count: Int) -> Virtualizer {
+  case v.options.count == count {
+    True -> v
+    False -> set_options(v, Options(..v.options, count:))
+  }
+}
+
 /// Record a measured size for one item. If the size is unchanged, returns the
 /// virtualizer untouched (no rebuild). Otherwise rebuilds the measurements
 /// list — this is O(count) but happens only when an item actually resizes.

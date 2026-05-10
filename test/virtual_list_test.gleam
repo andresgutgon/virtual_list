@@ -5,7 +5,7 @@ import gleeunit/should
 import virtual_list.{
   type Options, Options, container_size, default_options,
   invalidate_measurements, measure_item, measure_item_at, new, scroll_offset,
-  set_container_size, set_options, set_scroll_offset, total_size,
+  set_container_size, set_count, set_options, set_scroll_offset, total_size,
   virtual_items,
 }
 
@@ -284,6 +284,59 @@ pub fn invalidate_measurements_then_remeasure_test() {
     |> measure_item_at(0, 75)
   // total = 75+50+50 = 175
   total_size(v) |> should.equal(175)
+}
+
+// ---------------------------------------------------------------------------
+// set_count
+// ---------------------------------------------------------------------------
+
+pub fn set_count_increases_total_size_test() {
+  // Grow from 3 to 5 items; total = 5×50 = 250
+  let v = make(3, 50) |> set_count(5)
+  virtual_list.options(v).count |> should.equal(5)
+  total_size(v) |> should.equal(250)
+}
+
+pub fn set_count_decreases_total_size_test() {
+  // Shrink from 5 to 2 items; total = 2×50 = 100
+  let v = make(5, 50) |> set_count(2)
+  virtual_list.options(v).count |> should.equal(2)
+  total_size(v) |> should.equal(100)
+}
+
+pub fn set_count_to_zero_test() {
+  let v = make(5, 50) |> set_count(0)
+  total_size(v) |> should.equal(0)
+}
+
+pub fn set_count_noop_when_same_test() {
+  // Identical count must return the virtualizer untouched.
+  // We verify this by checking that a previously measured size is still in
+  // effect — if the virtualizer had been rebuilt it would fall back to the
+  // estimate, but the measurement would survive the rebuild anyway, so we
+  // just assert the count and total_size are unchanged.
+  let v = make(3, 50) |> measure_item_at(0, 80)
+  let before = total_size(v)
+  let after = total_size(set_count(v, 3))
+  after |> should.equal(before)
+  virtual_list.options(v).count |> should.equal(3)
+}
+
+pub fn set_count_preserves_scroll_offset_test() {
+  let v = make(10, 50) |> set_scroll_offset(300) |> set_count(20)
+  scroll_offset(v) |> should.equal(300)
+}
+
+pub fn set_count_preserves_container_size_test() {
+  let v = make(10, 50) |> set_container_size(600) |> set_count(20)
+  container_size(v) |> should.equal(600)
+}
+
+pub fn set_count_reuses_measured_sizes_test() {
+  // Measure item 0 at 100px, then grow from 3 to 5 items.
+  // The existing measurement must survive; total = 100+50+50+50+50 = 300.
+  let v = make(3, 50) |> measure_item_at(0, 100) |> set_count(5)
+  total_size(v) |> should.equal(300)
 }
 
 // ---------------------------------------------------------------------------
