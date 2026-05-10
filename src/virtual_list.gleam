@@ -133,21 +133,30 @@ pub fn set_container_size(v: Virtualizer, size: Int) -> Virtualizer {
 /// Record a measured size for one item. If the size is unchanged, returns the
 /// virtualizer untouched (no rebuild). Otherwise rebuilds the measurements
 /// list — this is O(count) but happens only when an item actually resizes.
+///
+/// Sizes `<= 0` are ignored. ResizeObserver can briefly report `0` while
+/// an element is detaching, mid-transition, or in a `display: none` ancestor;
+/// caching a `0` would collapse subsequent items onto the same start offset
+/// and stack them visually.
 pub fn measure_item(
   v: Virtualizer,
   key: String,
   size: Int,
 ) -> Virtualizer {
-  case dict.get(v.item_sizes, key) {
-    Ok(prev) if prev == size -> v
-    _ -> {
-      let new_sizes = dict.insert(v.item_sizes, key, size)
-      Virtualizer(
-        ..v,
-        item_sizes: new_sizes,
-        measurements: build_measurements(v.options, new_sizes),
-      )
-    }
+  case size <= 0 {
+    True -> v
+    False ->
+      case dict.get(v.item_sizes, key) {
+        Ok(prev) if prev == size -> v
+        _ -> {
+          let new_sizes = dict.insert(v.item_sizes, key, size)
+          Virtualizer(
+            ..v,
+            item_sizes: new_sizes,
+            measurements: build_measurements(v.options, new_sizes),
+          )
+        }
+      }
   }
 }
 
@@ -229,8 +238,8 @@ fn build_single_lane_loop(
     False -> {
       let key = opts.get_item_key(i)
       let size = case dict.get(item_sizes, key) {
-        Ok(s) -> s
-        Error(_) -> opts.estimate_size(i)
+        Ok(s) if s > 0 -> s
+        _ -> opts.estimate_size(i)
       }
       let start = case i == 0 {
         True -> cursor
@@ -276,8 +285,8 @@ fn build_multi_lane_loop(
     False -> {
       let key = opts.get_item_key(i)
       let size = case dict.get(item_sizes, key) {
-        Ok(s) -> s
-        Error(_) -> opts.estimate_size(i)
+        Ok(s) if s > 0 -> s
+        _ -> opts.estimate_size(i)
       }
       let #(lane, lane_end) = shortest_lane(lane_ends)
       let start = case lane_end == opts.padding_start {

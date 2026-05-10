@@ -30,6 +30,10 @@ function attachItemObserver(rootEl, indexAttribute, onMeasureItem) {
 
         const box = entry.borderBoxSize?.[0]
         const size = box ? Math.round(box.blockSize) : node.offsetHeight
+        // Drop transient zero/negative sizes — they can fire while the row is
+        // detaching, mid-transition, or under a hidden ancestor, and would
+        // collapse the layout when stored.
+        if (size <= 0) continue
         if (measured.get(node) === size) continue
         measured.set(node, size)
         onMeasureItem(index, size)
