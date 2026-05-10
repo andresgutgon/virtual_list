@@ -40,10 +40,6 @@ This package gives you:
 gleam add virtual_list
 ```
 
-> **Status.** Pre-1.0; the API is shaped after TanStack's `Virtualizer`
-> but only the slice we currently need is exposed. PRs to fill the gaps
-> (e.g. `scrollToIndex`, smooth-scroll reconciliation) welcome.
-
 ## Quickstart (Lustre, container scroll)
 
 ```gleam
@@ -170,21 +166,100 @@ new visible window.
 
 ## Differences vs. TanStack Virtual
 
-The shape mirrors TanStack, but a few things are simpler — partly Gleam
-ergonomics, partly because we haven't needed them yet:
+The shape mirrors TanStack, but several things are absent or simpler —
+partly Gleam ergonomics, partly because they haven't been needed yet.
 
-- **No imperative methods.** The TanStack class exposes `scrollToIndex`,
-  `scrollToOffset`, `measure()`, etc. Here, you drive the virtualizer
-  with pure setters and dispatch messages from your update loop.
-- **No smooth-scroll reconciliation.** TanStack runs a rAF loop to
-  re-target `scrollToIndex` as item sizes settle; this port doesn't yet.
-- **`getItemKey` defaults to the index.** Override it (via
-  `Options.get_item_key`) when you need keys to survive sort/filter
-  changes.
-- **Single-pass measurement rebuild.** TanStack tracks
-  `pendingMeasuredCacheIndexes` to incrementally update from the first
-  changed index; this port rebuilds the measurements list when an item
-  size changes. For lists in the low thousands this is fine.
+### Absent features
+
+**No imperative scroll methods.** TanStack exposes `scrollToIndex`,
+`scrollToOffset`, and `scrollBy`, each accepting an alignment
+(`start | center | end | auto`) and a `behavior` (`auto | smooth |
+instant`). This port has no equivalent; scroll position is entirely
+driven by the host app.
+
+**No smooth-scroll reconciliation.** When `scrollToIndex` is called with
+`behavior: 'smooth'`, TanStack runs a rAF loop that re-targets the
+destination as item sizes settle, suppresses measurements of far-away
+items during the animation, and bails out after 5 s. None of that loop
+exists here.
+
+**Vertical only.** TanStack has a `horizontal` flag that switches every
+axis — `scrollLeft`, `offsetWidth`, `inlineSize`. This port is
+vertical-only.
+
+**No `scrollMargin`.** TanStack adds `scrollMargin` to each item's start
+offset (`start = prevItem.end + gap : paddingStart + scrollMargin`). This
+corrects item positions when the virtual list does not begin at the top of
+its scroll container — for example when a sticky header sits above it in
+the same scrollable element. Without it, measurements are off by the
+header height.
+
+**No scroll-position correction on resize.** TanStack's `resizeItem`
+checks whether the resizing item is above the current scroll offset and,
+if so, immediately adjusts the scroll position by the size delta to
+prevent visible content from jumping. This port does not do that; rows
+that grow or shrink above the fold will shift the visible content.
+
+**`rangeExtractor` is not configurable.** TanStack exposes the range
+extractor as a user-supplied function so consumers can inject fixed
+indices (e.g. sticky section headers that must always be mounted). This
+port hardcodes the default extractor.
+
+**No `enabled` flag.** TanStack can disable virtualisation entirely —
+useful for falling back to normal flow on small lists or during SSR.
+
+### Simpler implementations
+
+**`getItemKey` defaults to the string index.** Override via
+`Options.get_item_key` when keys need to survive sort or filter changes.
+TanStack's default key extractor returns the numeric index; this port
+returns a string.
+
+**Single-pass measurement rebuild.** TanStack tracks
+`pendingMeasuredCacheIndexes` and rebuilds measurements only from the
+first changed index (`min(pendingIndexes)`), so items above the change
+are untouched. This port rebuilds the full measurements list on every
+size change. For lists in the low thousands the difference is not
+noticeable, but it grows linearly with count.
+
+**Simpler multi-lane range calculation.** TanStack's multi-lane
+`calculateRange` expands the visible window forward and backward
+per-lane, correctly handling lanes whose tallest item extends beyond the
+others. This port uses the same single-index start/end approach as the
+single-lane path, which can clip items or over-include them when lane
+heights diverge significantly.
+
+## TODO
+
+Contributions welcome. Items are roughly ordered by impact.
+
+- [ ] **`scrollToIndex` / `scrollToOffset` / `scrollBy`** — imperative
+  scroll methods with alignment (`start | center | end | auto`) and
+  behavior (`auto | smooth | instant`) options. The Lustre adapter would
+  expose these as `Effect(msg)` values.
+- [ ] **Smooth-scroll reconciliation** — rAF loop that re-targets scroll
+  destination as measured sizes settle; measurement suppression for
+  out-of-range items during animation; safety-valve timeout.
+- [ ] **Scroll-position correction on resize** — when an item above the
+  fold changes size, adjust the scroll offset by the delta so visible
+  content does not jump. Requires the adapter to be able to imperatively
+  set `scrollTop` / `scrollY`.
+- [ ] **`scrollMargin`** — offset added to all item start positions,
+  needed when the list does not start at the top of its scroll container.
+- [ ] **Configurable `rangeExtractor`** — expose the extractor as an
+  `Options` field so consumers can inject always-mounted indices (sticky
+  headers, pinned rows).
+- [ ] **Horizontal mode** — `horizontal: Bool` option that switches the
+  axis for scroll offset, container size, item size, and positioning
+  style (`translateX` instead of `translateY`).
+- [ ] **Incremental measurement rebuild** — track which indices changed
+  and rebuild only from `min(changedIndexes)`, matching TanStack's
+  `pendingMeasuredCacheIndexes` optimisation.
+- [ ] **Multi-lane range fix** — expand the visible range per-lane
+  (forward and backward) so all lanes are correctly covered when item
+  heights differ across lanes.
+- [ ] **`enabled` flag** — skip virtualisation entirely when `False`;
+  return all items and clear caches.
 
 ## Acknowledgements
 
