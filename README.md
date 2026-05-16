@@ -138,6 +138,153 @@ In window mode the spacer sits in document flow, the page scrolls
 naturally, and `scroll_offset` is reported relative to the spacer's top
 (via `getBoundingClientRect`). The pure virtualizer math doesn't change.
 
+## Page transitions
+
+The package ships a `virtual_list/page_transition` module that wires the
+[View Transitions API](https://developer.chrome.com/docs/web-platform/view-transitions)
+to a list ↔ detail flow built on Lustre + [modem](https://hexdocs.pm/modem/).
+It morphs a row's fields (name, badge, etc.) into a detail page on every
+navigation — click, swipe, native back/forward, keyboard — without you
+having to reach for `pushState` or fight modem's popstate listener.
+
+### Why a separate module?
+
+Virtual lists pool DOM nodes. A `view-transition-name` set as an inline
+style on one slot lingers when that slot is repurposed for a different
+item, and the View Transitions API throws `InvalidStateError` when two
+elements share a name at snapshot time. This module clears every
+`[data-vt-field]` between transitions and re-tags only the row being
+animated.
+
+It also handles a subtler problem: the View Transitions spec captures the
+*old* snapshot during the next "update the rendering" cycle, not
+synchronously inside `startViewTransition`. Lustre schedules its render
+via `requestAnimationFrame` — which `page_transition` patches to
+`queueMicrotask` while a transition is in flight, so Lustre renders
+*inside* the VT callback. And the capture-phase popstate listener calls
+`stopImmediatePropagation` so modem can't dispatch first and tear the
+list down before the snapshot is taken.
+
+### Quickstart
+
+Mark each row and the fields that should morph:
+
+```gleam
+import virtual_list/page_transition as vt_pt
+import lustre/attribute
+import lustre/element/html
+
+fn render_row(contact: Contact) {
+  html.div(
+    [attribute.attribute(vt_pt.item_id_attr, int.to_string(contact.id))],
+    [
+      html.span(
+        [attribute.attribute(vt_pt.vt_field_attr, "contact-name")],
+        [element.text(contact.name)],
+      ),
+      // ...
+    ],
+  )
+}
+```
+
+In the detail page, set `view-transition-name` on the matching elements
+(values must match the row's `data-vt-field` strings):
+
+```gleam
+html.h1(
+  [attribute.style("view-transition-name", "contact-name")],
+  [element.text(contact.name)],
+)
+```
+
+Declare the route pair as a module-level constant in the page itself:
+
+```gleam
+// page/contacts.gleam
+pub const route_transition = vt_pt.Pair(
+  list: "^(/contacts|/)$",
+  detail: "^/contacts/(\\d+)$",
+)
+```
+
+In your app init, install once and register every page's pair:
+
+```gleam
+fn init(_) {
+  // install BEFORE modem.init — the capture-phase popstate handler must
+  // be registered first so it can stopImmediatePropagation before modem's
+  // bubble-phase handler dispatches the navigation to Lustre.
+  vt_pt.install()
+  vt_pt.register([contacts.route_transition])
+  let #(model, router_effect) = router.init(modem.initial_uri())
+  // ...
+}
+```
+
+In your row click handler, call `navigate_forward` instead of pushing a
+URL via modem:
+
+```gleam
+UserClickedContact(id) -> {
+  let path = "/contacts/" <> int.to_string(id)
+  #(model, effect.from(fn(_) {
+    vt_pt.navigate_forward(id, path, fn() { Nil })
+  }))
+}
+```
+
+For the detail page's in-app back button:
+
+```gleam
+UserClickedBack -> {
+  #(model, effect.from(fn(_) {
+    vt_pt.navigate_back(model.contact_id)
+  }))
+}
+```
+
+The native back button, swipe, and keyboard back are handled
+automatically by the popstate listener `install` registered.
+
+### Required CSS
+
+The View Transitions API renders into `::view-transition-*`
+pseudo-elements; styling them is up to you. A minimal default:
+
+```css
+/* Cross-fade by default */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 0.25s;
+}
+
+/* page_transition toggles this class on <html> whenever the URL matches
+   a registered detail regex. Useful for detail-as-overlay layouts. */
+html.scroll-locked {
+  overflow: hidden;
+}
+```
+
+### API summary
+
+- `Pair(list: String, detail: String)` — a route shape. `list` matches
+  list page paths; `detail` matches the detail path AND captures the
+  item id in group 1.
+- `install() -> Nil` — wires the global listeners (popstate, click,
+  modem-push, modem-replace) and patches `requestAnimationFrame`.
+  Idempotent. Call once at app init, before `modem.init`.
+- `register(pairs: List(Pair)) -> Nil` — adds pairs to the registry.
+  Idempotent by regex source.
+- `uninstall() -> Nil` — removes every listener and clears the registry.
+  For hot-reload and tests.
+- `navigate_forward(item_id, path, then_fn) -> Nil` — drives a list →
+  detail transition. `then_fn` runs after the history push.
+- `navigate_back(item_id) -> Nil` — drives an in-app detail → list
+  transition. `item_id` identifies the row to morph back into.
+- `item_id_attr` / `vt_field_attr` — attribute names to tag rows and
+  morphable fields.
+
 ## How it works
 
 **Pure core (`virtual_list`).** Holds an opaque `Virtualizer` with the
