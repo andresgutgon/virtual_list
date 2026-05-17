@@ -12,14 +12,22 @@
 // transition) compose. Each owner increments on entry and decrements on
 // exit; rAF stays patched while count > 0.
 let _vtRafGuards = 0;
-const _origRAF = window.requestAnimationFrame.bind(window);
-window.requestAnimationFrame = function (cb) {
-  if (_vtRafGuards > 0) {
-    queueMicrotask(() => cb(performance.now()));
-    return 0;
-  }
-  return _origRAF(cb);
-};
+
+// The rAF patch only makes sense in a browser. Guarding the top level lets
+// this module be imported from Node (gleam test, server-side renders) without
+// crashing — the public functions all reach for `window` / `document` and
+// would still fail when called, but importing the module to read constants
+// like `item_id_attr` is now safe.
+if (typeof window !== "undefined") {
+  const _origRAF = window.requestAnimationFrame.bind(window);
+  window.requestAnimationFrame = function (cb) {
+    if (_vtRafGuards > 0) {
+      queueMicrotask(() => cb(performance.now()));
+      return 0;
+    }
+    return _origRAF(cb);
+  };
+}
 
 // Attribute names: keep in sync with page_transition.gleam constants.
 const ITEM_ATTR = "data-list-item-id";

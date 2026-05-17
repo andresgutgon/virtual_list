@@ -5,6 +5,18 @@ All notable changes to `virtual_list` will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-05-17
+
+### Fixed
+
+- `virtual_list/page_transition` is now safe to import from Node. The
+  module's top-level `window.requestAnimationFrame` patch is guarded by
+  `typeof window !== "undefined"`, so consumers can read constants
+  (`item_id_attr`, `vt_field_attr`) or define a `Pair` in code that's
+  compiled alongside server-side tests without a `ReferenceError: window is
+  not defined` at import time. The public functions still require a
+  browser at call time.
+
 ## [0.2.0] - 2026-05-17
 
 ### Added
